@@ -1,0 +1,270 @@
+Normalize
+
+Below is a concrete layout for each minimal sheet and where your existing columns land.
+
+1) Sites (merge all “Reference Sites” into this)
+
+Grain: 1 row = 1 site (NEC, CO, Lab, Hub, Cell Site, etc.)
+
+Sheet name: Sites
+
+Columns:
+
+Site_Code (PK, from Site Code)
+
+CLLI
+
+Site_Name
+
+Site_Type (NEC, CO, Lab, Hub, Cell Site, …)
+
+Network (OT Core, Wireless, Lab, etc.)
+
+Priority_Band (P0, P1, P2, etc.)
+
+Address
+
+City
+
+State
+
+Postal_Code
+
+Region
+
+Affiliate
+
+System_ID
+
+Latitude
+
+Longitude
+
+Primary_Contact
+
+Primary_Contact_Email
+
+Notes
+
+From existing:
+
+Entire Reference_Sites.csv → this sheet.
+
+In Assets, Site/Location should be a FK → Sites.Site_Code (e.g., HAYSVAXA).
+
+2) Networks_IPs (normalize your Reference_IPs)
+
+Grain: 1 row = 1 IP address or IP template for a device role at a site.
+
+Sheet name: Networks_IPs
+
+Columns:
+
+IP_UID (PK, e.g., IP-000001 – you can generate or let Apps Script handle)
+
+Site_Code (FK → Sites.Site_Code)
+
+CLLI
+
+IP_Address
+
+Subnet
+
+CIDR
+
+VLAN_ID
+
+Device_Role (PLC, HMI, OT Switch, SCADA, UPS, etc.)
+
+Device_Name (friendly name or expected hostname)
+
+Network_Segment (L2 Control Network, L3 Site Operations, L1 Power Network, etc.)
+
+Gateway_IP_Device
+
+Open_Ports_Template
+
+OT_IT_Network (OT / IT)
+
+Notes
+
+From existing:
+
+Reference_IPs.csv → becomes this sheet (with deduped header once).
+
+In Assets, IP Address, Network Segment, Open Ports, Gateway IP/Device, Network could optionally reference this sheet:
+
+Either:
+
+Keep those as direct columns on Assets, or
+
+Add IP_UID to Assets and look up IP details via formula/Apps Script.
+
+For minimal sheet count but still clean structure, I’d keep the Networks_IPs sheet and leave Assets with direct IP info for now. Later you can migrate to IP_UID once the model stabilizes.
+
+3) Assets (your main CMDB table)
+
+Grain: 1 row = 1 OT asset (PLC/HMI/switch/server/etc.)
+
+Sheet name: Assets
+
+Columns (normalized names, same content):
+
+Asset_UID (PK)
+
+Asset_Type (PLC, HMI, OT Switch, SCADA Server, Historian, UPS…)
+
+Asset_Category (Field Device, Compute, Network, Power, Security, etc.)
+
+Manufacturer
+
+Model_Version (rename of Model/Version)
+
+Serial_Asset_ID
+
+Site_Code (FK → Sites.Site_Code, from Site/Location)
+
+Zone_Process_Area (e.g., Boiler Room, MCC-1, Control Room)
+
+Site_Type (copy from Sites or drop if redundant – NEC/CO/Lab)
+
+Network (OT Core, Wireless, Lab, etc.)
+
+Network_Segment (L2 Control Network, L3 Site Operations, etc.)
+
+IP_Address
+
+Open_Ports
+
+Gateway_IP_Device
+
+VAST_ID (FK to external system, but just keep as code for now)
+
+Owner_Responsible_Party
+
+Deployment_Date
+
+Last_Verified
+
+Priority_Band (P0 – Safety / Life, P1 – Critical Service, etc.)
+
+Criticality (Safety, Production-Critical, Support, etc.)
+
+Risk_Category (High, Medium, etc.)
+
+Government (Y/N)
+
+Remote_Access_Enabled (Yes/No)
+
+AOLR_in_CyberArk (No/In CyberArk/etc.)
+
+Splunk_Logging (Direct to Splunk/Via Gateway Device/None)
+
+CyberVault_Backup (Yes/No/Planned)
+
+Maintenance_Schedule
+
+Firmware_Software_Ver
+
+Documentation_Link
+
+Network_Map_Link
+
+State_Status (Active, Retired, Planned…)
+
+Notes
+
+Created_By
+
+Created_Date
+
+Modified_By
+
+Modified_Date
+
+From existing:
+
+This is essentially your Assets.csv with:
+
+Site/Location → Site_Code
+
+Model/Version → Model_Version
+
+Serial/Asset ID → Serial_Asset_ID
+
+You can later add validation lists for: Priority_Band, Criticality, Risk_Category, etc., instead of making extra sheets.
+
+4) Asset_Relationships
+
+Grain: 1 row = 1 directed relationship between two assets.
+
+Sheet name: Asset_Relationships
+
+Columns:
+
+Relationship_UID (PK)
+
+Parent_Asset_UID (FK → Assets.Asset_UID)
+
+Child_Asset_UID (FK → Assets.Asset_UID)
+
+Relationship_Type (Controls, Monitors, Depends On, Communicates With, Protects, Hosted On, Connected To, Powers, etc.)
+
+Dependency_Level (Hard / Soft / Informational)
+
+Created_Date
+
+Verified_Date
+
+Notes
+
+From existing:
+
+Your Asset_Relationships.csv maps straight into this with no structural changes needed.
+
+5) Asset_Audit_Log (even though you didn’t paste it here)
+
+Grain: 1 row = one change event (append-only).
+
+Sheet name: Asset_Audit_Log
+
+Columns (recommended minimal):
+
+Audit_UID (PK)
+
+Asset_UID (FK → Assets.Asset_UID)
+
+Change_Timestamp
+
+Change_Type (Create / Update / Delete / Verify / Discovery)
+
+Changed_By
+
+Field_Name
+
+Old_Value
+
+New_Value
+
+Change_Source (Manual, Import, Script, API, Scan, etc.)
+
+Notes
+
+You already mentioned Asset_Audit_Log.csv in your earlier spec – this is the place it lives. Different grain than Assets, so it really should stay its own sheet.
+
+TL;DR – Minimal Sheet Set
+
+1. Sites
+Physical/logical locations, CLLI, priority, contacts.
+
+2. Networks_IPs
+IP/VLAN catalog and device-role templates per site.
+
+3. Assets
+All OT CIs with site, IP, risk, logging, and governance metadata.
+
+4. Asset_Relationships
+Graph edges: parent/child, “Controls / Monitors / Depends On / Communicates With / Hosted On / Protects / Powers”.
+
+
+
