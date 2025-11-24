@@ -1,0 +1,590 @@
+OT CMDB / Industrial Asset Intelligence Platform (GAS v1)
+
+You are an expert OT/ICS engineer and full-stack developer.
+Your task is to build a **single-tenant OT CMDB / Industrial Asset Intelligence Platform** as a **Google Apps Script web app** backed by Google Sheets.
+The implementation must be structured in a way that the **data model and business logic are cleanly separated** from UI and from Google-specific plumbing so it can later be ported to an independent project.
+Below is the full specification you must implement.
+q
+---
+### 0. SCOPE & ARCHITECTURE
+**Goal:**
+Create a ServiceNow-style OT CMDB for industrial environments, implemented as:
+* A **Google Sheet** used as the database
+* A **Google Apps Script (GAS)** project as backend
+* A **GAS HTML Service web UI** as the front-end
+This is a **single-tenant** system:
+* Only one Google Workspace domain
+* ~3 admins use it
+* No RBAC beyond standard Google sharing
+This system is the **system of record for OT assets**, including:
+* PLCs, HMIs, SCADA servers, Historians
+* Engineering workstations
+* OT switches, routers, firewalls
+* Sensors, VFDs, UPS, power controllers
+* OT DMZ servers
+* Virtualization hosts running OT workloads
+Out of scope:
+* Generic IT assets (office laptops, HR systems, etc.)
+* External public APIs / webhooks
+* Multi-tenant separation
+* Fancy compliance dashboards (reports can be built later from the Sheet)
+Integrations are **file-based**:
+* Scheduled GAS imports for Nessus scan exports (CSV/JSON)
+* Manual Nmap results imports (XML/text) uploaded or pasted by users
+
+
+### 1. DATA MODEL – GOOGLE SHEETS
+Create a single Google Spreadsheet (e.g., **`OT CMDB`**) with exactly these tabs:
+Site Catalog – Reference_Sites
+Spreadsheet https://docs.google.com/spreadsheets/d/1mUcNZcVogxtysZOqzVHYGBzmQuIWMAOoQP94BwWN7GU/edit?usp=sharing
+
+✅ 1. Assets Sheet — Headers + First 5 Rows
+Headers
+Asset_UID	Asset Type	Asset_Category	Manufacturer	Model/Version	Serial/Asset ID	Site/Location	Zone/Process Area	Site Type	Network	Network Segment	IP Address	Open Ports	Gateway IP/Device	VAST ID	Owner/Responsible Party	Deployment Date	Last Verified	Priority Band	Criticality	Risk Category	Government	Remote_Access_Enabled	AOLR in CyberArk	Splunk Logging	CyberVault Backup	Maintenance Schedule	Firmware/Software Ver	Documentation Link	Network Map Link	State/Status	Notes	Created_By	Created_Date	Modified_By	Modified_Date
+
+First 5 Example Rows
+OT-000101	PLC	Field Device	Schneider	M580	SN-M580-0001	HAYSVAXA	Boiler Room	NEC	OT Core	L2 Control Network	10.45.12.10	502/tcp,443/tcp	10.45.12.1	VAST-000101	OT Eng – Hays	2023-11-15	2025-02-03	P0 - Safety / Life	Safety	High	Y	No	In CyberArk	Direct to Splunk	Yes	Quarterly	FW 3.2.1	https://docs.example.com/m580-boiler-sop.pdf	https://netmaps.example.com/hays-l2-control.vsdx	Active	Primary boiler PLC controlling safety loop	system	2023-11-15T08:10:00Z	ot.admin	2025-02-03T13:25:00Z
+
+OT-000102	HMI	Compute	Schneider	Magelis GTO	SN-HMI-0001	HAYSVAXA	Boiler Room	NEC	OT Core	L2 Control Network	10.45.12.11	80/tcp,443/tcp,502/tcp	10.45.12.1	VAST-000102	OT Eng – Hays	2023-11-20	2025-02-01	P1 - Critical Service	Production-Critical	Medium	Y	Yes	In CyberArk	Via Gateway Device	Planned	Quarterly	FW 2.7.0	https://docs.example.com/hmi-magelis-gto.pdf	https://netmaps.example.com/hays-l2-control.vsdx	Active	HMI for boiler PLC-OT-000101	ot.admin	2023-11-20T09:05:00Z	ot.admin	2025-02-01T11:10:00Z
+
+OT-000103	OT Switch	Network	Cisco	IE-4010	SN-SW-HAYS-01	HAYSVAXA	MCC-1	NEC	OT Core	L2 Control Network	10.45.12.1	22/tcp,161/udp	10.45.12.254	VAST-000103	NMC – OT Defense	2023-10-01	2025-01-10	P1 - Critical Service	Production-Critical	Medium	Y	No	In CyberArk	Direct to Splunk	Yes	Annually	IOS 15.2(7)E	https://docs.example.com/cisco-ie4010-std.pdf	https://netmaps.example.com/hays-core-switching.vsdx	Active	Field distribution switch for boiler and chiller networks	system	2023-10-01T07:00:00Z	noc.user	2025-01-10T15:45:00Z
+
+OT-000104	SCADA Server	Compute	GE	iFIX 6.0	SN-SCADA-HAYS-01	HAYSVAXA	Control Room	NEC	OT Core	L3 Site Operations	10.45.20.20	1433/tcp,3389/tcp,443/tcp	10.45.20.1	VAST-000104	OT Eng – Hays	2022-08-15	2025-01-28	P1 - Critical Service	Production-Critical	High	Y	Yes	In CyberArk	Direct to Splunk	Yes	Quarterly	Win2019 LTSC 1809 + iFIX 6.0	https://docs.example.com/ifix-admin-guide.pdf	https://netmaps.example.com/hays-l3-ops.vsdx	Active	Primary SCADA node for Hays NEC	system	2022-08-15T10:30:00Z	ot.eng1	2025-01-28T14:00:00Z
+
+OT-000105	Historian	Compute	AVEVA	Historian 2020	SN-HIST-HAYS-01	HAYSVAXA	Control Room	NEC	OT Core	L3 Site Operations	10.45.20.21	1433/tcp,135/tcp	10.45.20.1	VAST-000105	OT Eng – Hays	2022-09-01	2025-01-28	P2 - Important	Support	Medium	Y	No	Via Gateway Device	Direct to Splunk	Planned	Bi-Annually	Win2019 LTSC 1809 + AVEVA Hist 2020	https://docs.example.com/historian-buildbook.pdf	https://netmaps.example.com/hays-l3-ops.vsdx	Active	Historian for NEC sites HAYSVAXA and ARLNGVA	system	2022-09-01T11:00:00Z	ot.eng1	2025-01-28T14:10:00Z
+
+✅ 2. Reference_Sites Sheet — Headers + First 5 Rows
+Headers
+Site Code	CLLI	Site Name	Site Type	Network	Priority Band	Address	City	State	Postal Code	Region	Affiliate	System ID	Latitude	Longitude	Primary Contact	Primary Contact Email	Notes
+
+First 5 Rows
+HAYSVAXA	HAYSVAXAXXX	Hays VA NEC	NEC	OT Core	P0	7455 Larchmont Dr	Norfolk	VA	23505	Mid-Atlantic	Verizon Virginia LLC	SYS100001	36.90123	-76.27098	John Smith	ot-hays@vz-int.example	Core NEC supporting Hampton Roads region
+
+ARLNGVA	ARLNGVAAXXX	Arlington Central Office	CO	OT Core	P1	1234 Wilson Blvd	Arlington	VA	22201	Mid-Atlantic	Verizon Virginia LLC	SYS100002	38.8921	-77.0846	Mary Jones	ot-arlng@vz-int.example	Major CO serving DC metro
+
+ROCKLNVZ	ROCKLNVZXXX	Rocklin OT Lab	Lab	Lab	P2	500 Lab Way	Rocklin	CA	95765	West	Verizon California Inc	SYS100003	38.807	-121.295	Luke Chen	ot-rocklin@vz-int.example	Non production OT lab for testing and training
+
+RICHMVA	RICHMVAAXXX	Richmond Hub	Hub	OT Core	P1	900 Carrier Ave	Richmond	VA	23220	Mid-Atlantic	Verizon Virginia LLC	SYS100004	37.5538	-77.4603	Alex Green	ot-richm@vz-int.example	Regional OT and transport aggregation hub
+
+FAIRFVA1	FAIRFVA1XXX	Fairfax Cell Site 1	Cell Site	Wireless	P2	7800 Tower Rd	Fairfax	VA	22031	Southeast	Cellco Partnership	SYS100005	38.859	-77.273	Pat Lopez	ot-fairfax1@vz-int.example	Macro cell site with shared tower and shelter
+
+✅ 3. Reference_IPs Sheet — Headers + 5 Sample Rows (since your file repeats empty template rows)
+Headers
+Site Code	CLLI	IP Address	Subnet	CIDR	VLAN ID	Device Role	Device Name	Network Segment	Gateway IP/Device	Open Ports (Template)	OT/IT Network	Notes
+
+Generated Example Rows (accurate to Verizon NEC patterns)
+
+(These follow your Hays NEC / Arlington / Fairfax address patterns.)
+
+HAYSVAXA	HAYSVAXAXXX	10.45.12.10	10.45.12.0	/24	120	PLC	M580-PLC01	L2 Control Network	10.45.12.1	502/tcp,443/tcp	OT	PLC primary control loop
+
+HAYSVAXA	HAYSVAXAXXX	10.45.12.11	10.45.12.0	/24	120	HMI	HMI-GTO01	L2 Control Network	10.45.12.1	80/tcp,443/tcp,502/tcp	OT	Boiler HMI workstation
+
+ARLNGVA	ARLNGVAAXXX	10.55.30.5	10.55.30.0	/24	130	OT Switch	IE4010-CO-SW	L2 Distribution	10.55.30.1	22/tcp,161/udp	OT	Arlington CO core switching
+
+RICHMVA	RICHMVAAXXX	10.60.40.20	10.60.40.0	/24	140	SCADA	Server-SCADA01	L3 Site Ops	10.60.40.1	1433/tcp,3389/tcp,443/tcp	OT	Primary SCADA server
+
+FAIRFVA1	FAIRFVA1XXX	10.70.50.100	10.70.50.0	/24	150	UPS	UPS-FAIRFVA1	L1 Power Network	10.70.50.1	161/udp	OT	UPS SNMP monitored
+
+✅ 4. Asset_Relationships — Headers + First 5 Rows
+Headers
+Relationship_UID	Parent_Asset_UID	Child_Asset_UID	Relationship_Type	Dependency_Level	Created_Date	Verified_Date	Notes
+
+First 5 Rows
+REL-000001	OT-000103	OT-000101	Controls	Hard	2023-11-15	2025-02-03	Hays IE-4010 switch provides network path for boiler PLC
+REL-000002	OT-000101	OT-000102	Controls	Hard	2023-11-20	2025-02-01	HMI OT-000102 issues commands to PLC OT-000101
+REL-000003	OT-000104	OT-000101	Monitors	Soft	2022-08-15	2025-01-28	SCADA reads process tags from boiler PLC OT-000101
+REL-000004	OT-000104	OT-000102	Monitors	Soft	2022-08-15	2025-01-28	SCADA receives operator actions from HMI OT-000102
+REL-000005	OT-000105	OT-000104	Depends On	Soft	2022-09-01	2025-01-28	Historian relies on SCADA for data feed
+
+
+### 2. TAXONOMY CONSTANTS (CONFIG.GS)
+Create a GAS configuration file (e.g., `config.gs`) example
+```javascript
+const TAXONOMY = {
+  assetTypes: [
+    'PLC', 'HMI', 'SCADA Server', 'Historian',
+    'Engineering Workstation', 'OT Switch', 'OT Router',
+    'OT Firewall', 'Power Controller', 'UPS', 'Sensor',
+    'VFD', 'Virtualization Host', 'Other'
+  ],
+  assetCategories: [
+    'Compute','Network','Field Device','Safety','Power','Storage','Security','Other'
+  siteTypes: [
+    'NEC','CO','Hub','Data Center','Remote Hut','Cell Site','Lab','Other'
+  networks: [
+    'OT Core','OT Access','OT DMZ','IT Corp','Wireless','Lab','Other'
+  networkSegments: [
+    'L3.5 OT DMZ','L3 Site Operations','L2.5 Control DMZ',
+    'L2 Control Network','L1 Field I/O','Corporate','Access VLAN','Other'
+  priorityBands: [
+    'P0 - Safety / Life','P1 - Critical Service','P2 - Important','P3 - Low','P4 - Very Low'
+  criticality: ['Safety','Production-Critical','Support','Low'],
+  riskCategories: ['High','Medium','Low'],
+  states: ['Active','Retired','Standby','Planned'],
+  remoteAccess: ['Yes','No','N/A'],
+  aolrCyberArk: ['In CyberArk','Not in CyberArk','Planned','N/A'],
+  splunkLogging: ['Direct to Splunk','Via Gateway Device','Other SIEM','No Logging','Unknown'],
+  cyberVaultBackup: ['Yes','No','Planned','Unknown'],
+  maintenanceSchedule: [
+    'Monthly','Quarterly','Bi-Annually','Annually','As Needed'
+  relationshipTypes: [
+    'Controls',
+    'Communicates With',
+    'Depends On',
+    'Hosted On',
+    'Powered By',
+    'Connected To',
+    'Backed Up By',
+    'Managed By',
+    'Protects',
+    'Monitors'
+  dependencyLevels: ['Hard','Soft','Informational']
+};
+```
+Expose a backend function like `getDropdownOptions()` that returns these lists to the front-end so forms can use them as dropdowns.
+### 3. GAS PROJECT STRUCTURE
+Implement the following files in the GAS project:
+* `config.gs`
+  * Holds:
+    * `SPREADSHEET_ID`
+    * Sheet names (`Assets`, `Reference_Sites`, etc.)
+    * `TAXONOMY` constants
+  * Utility function to open the spreadsheet.
+* `cmdbBackend.gs`
+  * All business logic functions:
+    * `getAllAssets()`
+    * `getAssetById(assetUid)`
+    * `saveAsset(assetObj)`
+    * `retireAsset(assetUid)`
+    * `bulkUpdateAssets(assetUids, fieldName, newValue)`
+    * `getRelationshipsForAsset(assetUid)`
+    * `saveRelationship(relObj)`
+    * `getDesignVsActualSummary()`
+    * Etc.
+
+* `uiMain.gs`
+  * `doGet(e)` – main entry point
+  * `include(filename)` – HTML include helper
+  * Functions that serve HTML templates:
+    * `getAssetsHtml()`
+    * `getAssetFormHtml(assetUid)`
+    * `getRelationshipsHtml(assetUid)`
+* HTML files:
+  * `Index.html` – main shell
+  * `Assets.html` – list view + filters + bulk actions
+  * `AssetForm.html` – add/edit single asset
+  * `Relationships.html` – view/manage relationships for selected asset
+  * `Includes.html` – shared CSS/JS (loader, toast, layout, etc.)
+> Keep logic in `cmdbBackend.gs` as **platform-agnostic as possible** (pure JS functions that operate on in-memory arrays/objects, with thin wrappers that read/write from Sheets). This will make it easy to port later.
+### 4. CORE WEB APP BEHAVIOR
+#### 4.1 Entry Point (`doGet`)
+* `doGet(e)`:
+  * Renders `Index.html` using `HtmlService`
+  * Sets app title: `"OT CMDB / Industrial Asset Intelligence"`
+  * Uses templated includes via `<?!= include('Includes'); ?>`
+#### 4.2 Main Shell – `Index.html`
+* Contains:
+  * Header bar (app title)
+  * Simple nav (tabs/buttons) – start with:
+    * “Assets”
+    * “Relationships”
+    * (optional) “Design vs Reality”
+  * `<main id="app-main"></main>` – main content area
+  * Hidden loader element and toast element
+* On `DOMContentLoaded`:
+  * Call `loadAssetsView()` which:
+    * Calls `google.script.run.getAssetsHtml()` and injects into `#app-main`.
+* Global JS functions:
+  * `loadAssetsView()`
+  * `openAssetForm(assetUid)`
+  * `openRelationshipsView(assetUid)`
+#### 4.3 Assets List View – `Assets.html`
+This must behave like a **SharePoint-style list**.
+**UI elements:**
+* Header: “Assets”
+* Button: “+ Add Asset” → `openAssetForm()` (create mode)
+* Filters row:
+  * `Asset Type` (dropdown from taxonomy)
+  * `Site/Location` (values derived from current data)
+  * `Network Segment` (from taxonomy)
+  * `Risk Category` (from taxonomy)
+  * `State/Status` (from taxonomy)
+  * Text search field (for UID / Manufacturer / Model / Notes)
+  * Buttons: “Apply” and “Clear”
+* Table:
+  * Column headers:
+    * Checkbox (for bulk select)
+    * `Asset_UID`
+    * `Asset Type`
+    * `Manufacturer`
+    * `Model/Version`
+    * `Site/Location`
+    * `Network Segment`
+    * `Priority Band`
+    * `Criticality`
+    * `Risk Category`
+    * `State/Status`
+    * `Last Verified`
+    * Actions (Edit, Relationships)
+**List behavior:**
+* On load:
+  * Call `getDropdownOptions()` and `getAllAssets()`
+  * Store in `allAssets` (JS array of objects)
+  * Render table
+* Filters:
+  * `applyFilters()`:
+    * Filter `allAssets` with AND logic:
+      * Asset Type, Site, Network Segment, Risk Category, State
+      * Search text across:
+        * `Asset_UID`, `Manufacturer`, `Model/Version`, `Site/Location`, `Notes`
+  * `clearFilters()`:
+    * Reset fields
+    * Re-render full list
+* Sorting:
+  * Clicking on any column header must:
+    * Toggle ascending/descending sort for that column
+    * Sorting done **client-side** using `allAssets`
+  * At least these columns sortable:
+    * `Asset_UID`, `Asset Type`, `Site/Location`, `Network Segment`, `Priority Band`,
+      `Criticality`, `Risk Category`, `State/Status`, `Last Verified`
+* Bulk selection:
+  * Each row has a checkbox
+  * There is a “Select all” checkbox in the header
+* Bulk actions area:
+  * “Bulk Retire”
+  * “Bulk Update Field”
+**Bulk Retire:**
+* When clicked:
+  * Collect selected `Asset_UID`s
+  * Confirm with the user
+  * Call backend `bulkUpdateAssets(assetUids, 'State/Status', 'Retired')`
+  * Backend:
+    * For each asset:
+      * Update `State/Status = Retired`
+      * Set `Modified_By`, `Modified_Date`
+      * Write an `Asset_Audit_Log` entry with:
+        * `Change_Type = Retire`
+        * Previous and new values for `State/Status`
+        * Note: “Bulk retire via UI”
+  * Refresh the grid.
+**Bulk Update Field:**
+* UI:
+  * Open a modal/panel:
+    * Dropdown: `Field to update` – allowed fields:
+      * `Priority Band`
+      * `Criticality`
+      * `Risk Category`
+      * `Remote_Access_Enabled`
+      * `Maintenance Schedule`
+      * `State/Status`
+    * Dropdown or text input: `New value` (use taxonomy if relevant)
+  * Confirm button → call backend:
+    ```js
+    google.script.run.bulkUpdateAssets(selectedUids, fieldName, newValue)
+    ```
+* Backend:
+  * Loop through selected assets
+  * For each:
+    * Read current row
+    * Set field `fieldName = newValue`
+    * Set `Modified_By`, `Modified_Date`
+    * Append `Asset_Audit_Log` row:
+      * `Change_Type = Update`
+      * `Previous_Value` = relevant field snapshot
+      * `New_Value` = new field snapshot
+* UI refresh:
+  * After success, reload `allAssets` and re-render table
+  * Show a toast: “Updated N assets”
+#### 4.4 Asset Form View – `AssetForm.html`
+Used for **adding and editing** individual assets.
+**Behavior:**
+* Takes `assetUid` from template variable.
+* On init:
+  * Call `getDropdownOptions()` and populate form dropdowns:
+    * `Asset Type`, `Asset_Category`, `Site Type`, `Network`, `Network Segment`,
+      `Priority Band`, `Criticality`, `Risk Category`, `State/Status`,
+      `Remote_Access_Enabled`, `AOLR in CyberArk`, `Splunk Logging`,
+      `CyberVault Backup`, `Maintenance Schedule`
+  * If `assetUid` is non-empty:
+    * Call `getAssetById(assetUid)` and prefill all fields.
+  * If empty:
+    * Form is in “Create” mode.
+**Fields (must map exactly to headers):**
+* Hidden: `Asset_UID`
+* Visible fields for all other columns in `Assets` (text inputs, dates, selects, URLs, textarea for Notes)
+On submit:
+* Build a JS object with keys matching column headers exactly.
+* Call `saveAsset(assetObj)` via `google.script.run`.
+* Backend rules:
+  * If `Asset_UID` is empty:
+    * Generate new UID (`OT-000001` style)
+    * Fill `Created_By` and `Created_Date`
+    * Insert new row
+    * `Change_Type = Create` entry in `Asset_Audit_Log`
+  * If `Asset_UID` exists:
+    * Find row, compute diff for changed fields
+    * Update row with new values
+    * `Change_Type = Update` entry in `Asset_Audit_Log` with `Previous_Value` and `New_Value` JSON for changed fields
+* On success:
+  * Show toast “Asset saved: OT-000XYZ”
+  * Go back to Assets list (`loadAssetsView()`)
+#### 4.5 Relationships View – `Relationships.html`
+For a selected asset:
+* Show:
+  * Asset ID and name (read-only context)
+  * Two tables:
+    * **Upstream** relationships (where `Parent_Asset_UID` is something else and `Child_Asset_UID` = current asset)
+    * **Downstream** relationships (where `Parent_Asset_UID` = current asset)
+* Allow:
+  * Add relationship:
+    * Pick `Parent_Asset_UID` (dropdown or search)
+    * Pick `Child_Asset_UID`
+    * Select `Relationship_Type` from `TAXONOMY.relationshipTypes`
+    * Select `Dependency_Level` from `TAXONOMY.dependencyLevels`
+    * Enter optional notes
+  * Update `Verified_Date` for existing relationships when confirmed in the field
+  * Remove relationships (optional – if you implement remove, log it too)
+Backend:
+* `getRelationshipsForAsset(assetUid)` returns upstream and downstream lists.
+* `saveRelationship(relObj)`:
+  * If `Relationship_UID` empty:
+    * Generate `REL-00000X`
+    * Insert into `Asset_Relationships`
+    * `Change_Type = Relationship Added` in `Asset_Audit_Log`
+  * If existing:
+    * Update row
+    * `Change_Type = Relationship Updated` in `Asset_Audit_Log`
+### 4.6 SharePoint-Style Behavior – Bulk & Interactivity (MANDATORY)
+The **Assets list** must behave like a SharePoint list:
+1. **Filterable** – multiple fields (AND logic)
+2. **Sortable** – click on headers, toggle ascending/descending
+3. **Searchable** – single box to match key text fields
+4. **Bulk-select** – checkboxes
+5. **Bulk actions** – at least:
+   * Bulk Retire
+   * Bulk Update Field
+Additionally:
+* In the underlying Google Sheet:
+  * Turn on native **Filter views** on the `Assets` tab header row so admins can sort/filter directly if needed.
+
+
+
+* No external APIs used – just files + parsing + Sheet updates.
+### 6. DESIGN VS REALITY CHECK (REFERENCE_IPS VS ASSETS)
+Implement a backend function (and optional simple UI view) that:
+* Compares `Reference_IPs` and `Assets` by `Site Code` / `Site/Location` and `IP Address`.
+* Produces lists:
+  * IPs **in design but missing in Assets**
+  * Assets with `IP Address` not present in `Reference_IPs`
+  * Port template vs actual `Open Ports` mismatches
+* Output can be:
+  * A summary returned to UI
+  * And/or a “Design_vs_Actual” tab with marked rows
+### 7. SECURITY / ACCESS
+* Assumption: all 3 admins are trusted.
+* No RBAC required in-app.
+* The Google Sheet and web app should be shared only with:
+  * Those admins (edit access)
+  * Optional read-only viewers if desired (view-only)
+  
+### 8. IMPLEMENTATION STYLE FOR FUTURE PORTABILITY
+When implementing the GAS app:
+* Keep **data-access code** (Sheets APIs) in thin wrappers.
+* Keep **business logic** pure and separate:
+  * Example: functions that take arrays of asset objects and return filtered/sorted lists, diffs, etc.
+
+Objective: Build a Google Apps Script (GAS) web‑app backed by a Google Sheet that functions as a CMDB for OT assets (PLCs, HMIs, OT switches/routers/firewalls, etc.).
+Constraints:
+
+Single‑tenant (one domain, ~3 admins).
+
+Data stored in one Google Spreadsheet with clearly defined tabs (Assets, Reference_Sites, Reference_IPs, Asset_Relationships, plus possibly Asset_Audit_Log and Design_vs_Actual).
+
+UI built with GAS HTMLService (Index.html, Assets.html, AssetForm.html, Relationships.html, Includes.html).
+
+Back‑end code separated: configuration in config.gs, business logic in cmdbBackend.gs, UI glue in uiMain.gs.
+
+Taxonomy constants defined and exposed to front end via getDropdownOptions().
+
+Business logic (filter/sort/diffs etc) to be “pure” JS so easily portable; thin wrappers for sheet access.
+
+On front end: assets list behaves like SharePoint style — filters, search, sort, bulk select & actions.
+
+Asset form supports create/edit with audit logging.
+
+Relationship view supports add/update relationships.
+
+Design vs Reality view compares Reference_IPs vs Assets.
+
+No external APIs, just sheet operations.
+
+Good code comments, maintainable.
+
+(Performance note: since GAS + Sheets, need to beware of large dataset/slowness. See best‑practice for sheet as DB) 
+Medium
++1
+
+🧮 Implementation Plan / Steps
+
+Spreadsheet Setup
+
+Create the spreadsheet “OT CMDB” with the tab names and column headers exactly as spec for Assets, Reference_Sites, Reference_IPs, Asset_Relationships, plus an Asset_Audit_Log tab (headers: Change_Type, Asset_UID/Relationship_UID, Field_Name, Previous_Value, New_Value, Changed_By, Changed_Date, Notes etc).
+
+Populate the first example rows as given in spec to validate.
+
+Ensure sheet sharing is restricted to the admin group only.
+
+GAS Project Structure
+
+config.gs — define SPREADSHEET_ID, sheet names, and the TAXONOMY object (assetTypes, assetCategories, siteTypes, networks, networkSegments, priorityBands, criticality, riskCategories, states, remoteAccess, aolrCyberArk, splunkLogging, cyberVaultBackup, maintenanceSchedule, relationshipTypes, dependencyLevels).
+
+cmdbBackend.gs — implement:
+
+thin data‐access helpers: openSpreadsheet(), getSheetData(sheetName), findRow(sheetName, criteria), appendRow(sheetName,rowArr), updateRow(sheetName,rowIndex,rowArr)
+
+pure logic functions working on JS arrays/objects: e.g., filterAssets(allAssets, filters), sortAssets(allAssets, sortField, direction), diffAsset(oldObj,newObj) etc.
+
+wrapper functions tied to sheets: getAllAssets(), getAssetById(assetUid), saveAsset(assetObj), retireAsset(assetUid), bulkUpdateAssets(assetUids, fieldName, newValue), getRelationshipsForAsset(assetUid), saveRelationship(relObj), getDesignVsActualSummary().
+
+uiMain.gs — implement:
+
+doGet(e) → serve Index.html (set title etc)
+
+include(filename) → helper for including HTML includes
+
+server‑side functions called by client: getAssetsHtml(), getAssetFormHtml(assetUid), getRelationshipsHtml(assetUid)
+
+HTML templates:
+
+Includes.html — CSS/JS loader, toast, global layout, nav bar etc
+
+Index.html — shell with nav tabs (Assets, Relationships, Design vs Reality), main content container, loader/spinner, toast element. On load, call loadAssetsView().
+
+Assets.html — list view: filters row, search box, table with columns, bulk selection, bulk actions ("Bulk Retire", "Bulk Update Field"). JS logic for filtering, sorting, bulk actions and invoking server calls.
+
+AssetForm.html — form to add/edit: uses dropdowns populated from taxonomy + values for Site/Location (derived maybe from reference sites), etc. On submit calls saveAsset.
+
+Relationships.html — view upstream/downstream tables, add relationship form, update Verified_Date or remove.
+
+Additional: optional DesignVsActual.html view or baked into Assets nav.
+
+Front‑End Development
+
+On Index.html, implement nav bar with click handlers to load respective views.
+
+In Assets.html JS:
+
+Load taxonomy dropdowns via google.script.run.getDropdownOptions().
+
+Load assets via google.script.run.getAllAssets().
+
+Store allAssets in JS array.
+
+Render table rows (clientside).
+
+Implement filtering: on click “Apply” gather values, call filterAssets() (client side) then render.
+
+Implement sorting: attach click handlers to header cells, toggle direction, call sortAssets() (client side) then render.
+
+Implement “Select all” header checkbox, row checkboxes.
+
+Bulk Retire: gather selected UIDs → confirm → google.script.run.bulkUpdateAssets(selectedUids, 'State/Status','Retired') → on success reload list & toast.
+
+Bulk Update Field: open modal/panel, select field from allowed list, input new value (dropdown or text). On confirm call google.script.run.bulkUpdateAssets(selectedUids, fieldName, newValue) → reload list & toast “Updated N assets”.
+
+In AssetForm.html JS:
+
+On load: call getDropdownOptions() then, if assetUid provided, call getAssetById(assetUid) then fill fields.
+
+On submit: build JS object mapping all columns. Call google.script.run.saveAsset(assetObj). On success show toast & loadAssetsView().
+
+In Relationships.html JS:
+
+On load: given assetUid, call getRelationshipsForAsset(assetUid) → returns { upstream: [...], downstream: [...] }. Render two tables.
+
+Provide “Add Relationship” form: select parent/child asset (dropdown/search), select Relationship_Type, select Dependency_Level, notes. On submit call google.script.run.saveRelationship(relObj).
+
+Provide option to set Verified_Date for existing rows (e.g., inline editing) and optionally remove. On update call saveRelationship(updatedRelObj) or delete.
+
+Optional: Design vs Reality view: call getDesignVsActualSummary(), render missing IPs etc.
+
+Back‑End Implementation Details
+
+In saveAsset(assetObj):
+
+If Asset_UID empty ⇒ generate new UID (e.g., increment last UID, format “OT‑00000X”).
+
+Set Created_By = Session.getActiveUser().getEmail(), Created_Date = new Date().toISOString() (or Apps Script date). Append new row. Log audit: Change_Type = Create, Previous_Value = null, New_Value = JSON.stringify(assetObj), Changed_By = user, Changed_Date = timestamp, Notes = “Created via UI”.
+
+If Asset_UID exists ⇒ fetch existing row (match Asset_UID), compute diff (only changed fields). If no changes, maybe no update; else update row values, set Modified_By and Modified_Date. Log audit: Change_Type = Update, Previous_Value = JSON.stringify(changedFields), New_Value = JSON.stringify(newValuesForChangedFields), Notes = “Edited via UI”.
+
+In retireAsset(assetUid): basically wrapper of bulkUpdateAssets for a single asset on State/Status = Retired.
+
+In bulkUpdateAssets(assetUids, fieldName, newValue): iterate each UID, for each fetch row/index, get current value, if already equal skip, else update fieldName to newValue, set Modified_By/Date, append audit log with Change_Type = Update, Previous_Value = current, New_Value = newValue, Notes = “Bulk update via UI”. Return count of affected assets.
+
+In getAllAssets(): read Assets sheet (getRange values), convert to array of JS objects keyed by column header names, return to front end.
+
+In getAssetById(assetUid): call getAllAssets internally (or read specific row via index mapping). Return object or null.
+
+In getRelationshipsForAsset(assetUid): read Asset_Relationships sheet, filter for Parent_Asset_UID = assetUid (downstream) and Child_Asset_UID = assetUid (upstream). Return both lists.
+
+In saveRelationship(relObj):
+
+If Relationship_UID empty ⇒ generate new (REL‑00000X), append row (Parent_Asset_UID, Child_Asset_UID, Relationship_Type, Dependency_Level, Created_Date = now, Verified_Date = maybe null or now). Log audit: Change_Type = Relationship Added, Asset_UID = relObj.Parent_Asset_UID (or Child?), Previous_Value = null, New_Value = JSON.stringify(relObj), Changed_By, Changed_Date, Notes.
+
+If exists ⇒ find row, update fields (type/level/notes/verifiedDate). Log audit: Change_Type = Relationship Updated, Previous_Value = JSON.stringify(oldRowData), New_Value = JSON.stringify(newRowData), Notes = “Via UI”. Return success.
+
+In getDesignVsActualSummary():
+
+Read Reference_IPs, map by Site Code + IP Address.
+
+Read Assets (especially Site/Location, IP Address, Open Ports).
+
+Build lists: (a) IPs in Reference_IPs but not present as any asset with matching Site Code + IP Address. (b) Assets with IP Address not present in Reference_IPs. (c) For matching IP addresses, compare Open Ports (template column vs asset row Open Ports) and list mismatches (i.e., ports in design but not in actual, or actual extra/open). Return summary object to front end. Optionally write a “Design_vs_Actual” tab with flagged rows.
+
+Consider data volume/performance: reading whole sheet vs partial; for a first version with modest row counts this is fine. Use array processing rather than repeated getRange calls. (Best practices note) 
+Medium
++1
+
+UI Deployment & Sharing
+
+Deploy as a Web App in GAS: set access maybe “Anyone in domain” or “Only myself” + share sheet with the admin group.
+
+Ensure that the web app’s doGet serves the UI correctly.
+
+Add Google Sheet menu (optional) for Admins: “Open CMDB UI” linking to web app URL.
+
+Document the sharing instructions: only 3 admins have edit; viewers if needed.
+
+Portability / Clean separation
+
+In cmdbBackend.gs, ensure pure logic functions separated from sheet access. Example: filterAssets(array, filters) is pure; separate from reading sheet.
+
+Possibly put “data layer” file (e.g., dataAccess.gs) that only deals with Sheets API; business logic remains agnostic of Google specifics. So future porting to e.g., Node.js + Postgres would be easier.
+
+Keep consistent naming, modularization, comments such as “// Pure business logic — no Sheet API calls” and “// Data access – Sheets specific”.
+
+Document architecture in a README (not code) for future developer.
+
+Audit logging
+
+Polling modifications: Each change to asset or relationship must create an Asset_Audit_Log entry. Columns likely: Change_Type, Target_Type (Asset / Relationship), Target_UID, Field_Name (or JSON for multiple fields), Previous_Value, New_Value, Changed_By, Changed_Date, Notes.
+
+bulkUpdateAssets should produce multiple log entries (one per asset) or maybe one summarised but better one per asset for traceability.
+
+Testing & Example Data
+
+Use the provided sample rows as seeded data.
+
+Test create, edit asset; test filters/sorts; test bulk actions; test relationships add/update; test design‑vs‑actual logic.
+Your deliverable:
+* A working Google Apps Script web app that:
+  * Uses the described Sheets/tabs as the database
+  * Provides a ServiceNow CMDB or https://github.com/industrace/industrace Assets list (filters, sorting, search, bulk actions)
+  * Supports create/edit/retire assets with full audit logging
+  * Manages asset relationships and add a node diagram
+  * Provides a simple design-vs-reality view using `Reference_IPs`
+* Clear comments in code so another engineer can extend or port it later.
+
+INSTRUCTION proceed to scaffold the code and share the structure/files for my review 
