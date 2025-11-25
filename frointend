@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Titan OT CMDB</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              titan: {
+                50: '#f0f9ff',
+                100: '#e0f2fe',
+                500: '#0ea5e9',
+                800: '#075985',
+                900: '#0c4a6e',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+      /* Custom scrollbar for enterprise density */
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: #f1f5f9; }
+      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      .drawer-open { overflow: hidden; }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-900 antialiased">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useMemo, Fragment } = React;
+
+      // ----------------------------------------------------
+      // API BRIDGE (Connects to GAS.gs.txt backend)
+      // ----------------------------------------------------
+      const GAS = {
+        run: (funcName, ...args) => {
+          return new Promise((resolve, reject) => {
+            if (typeof google === 'undefined' || !google.script) {
+              // Fallback for local testing (Mock Data)
+              console.warn(`[DevMode] Calling GAS function: ${funcName}`, args);
+              if (funcName === 'getAllAssets') resolve([]); 
+              else if (funcName === 'getDropdownOptions') resolve({});
+              else resolve(null);
+              return;
+            }
+            google.script.run
+              .withSuccessHandler(resolve)
+              .withFailureHandler((err) => {
+                console.error(`GAS Error [${funcName}]:`, err);
+                reject(err);
+              })
+              [funcName](...args);
+          });
+        },
+        getAllAssets: () => GAS.run('getAllAssets'),
+        saveAsset: (asset) => GAS.run('saveAsset', asset),
+        bulkUpdateAssets: (uids, field, value) => GAS.run('bulkUpdateAssets', uids, field, value),
+        getDropdownOptions: () => GAS.run('getDropdownOptions'),
+        getRelationships: (uid) => GAS.run('getRelationships', uid),
+        saveRelationship: (rel) => GAS.run('saveRelationship', rel),
+        getDesignVsActual: () => GAS.run('getDesignVsActual')
+      };
+
+      // ----------------------------------------------------
+      // COMPONENTS
+      // ----------------------------------------------------
+
+      // --- AssetForm ---
+      function AssetForm({ asset, taxonomy, onSave, onCancel, embedded = false }) {
+        const [formData, setFormData] = useState(asset || {
+          State_Status: 'Active',
+          Risk_Category: 'Medium',
+          Remote_Access_Enabled: 'No',
+          Criticality: 'Support'
+        });
+
+        const handleChange = (field, value) => {
+          setFormData(prev => ({ ...prev, [field]: value }));
+        };
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          onSave(formData);
+        };
+
+        const Select = ({ label, field, options }) => (
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">{label}</label>
+            <select 
+              className="w-full border-slate-300 rounded-md text-sm focus:ring-titan-500 focus:border-titan-500 p-2 border"
+              value={formData[field] || ''}
+              onChange={e => handleChange(field, e.target.value)}
+            >
+              <option value="">Select...</option>
+              {options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          </div>
+        );
+
+        const Input = ({ label, field }) => (
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">{label}</label>
+            <input 
+              type="text"
+              className="w-full border-slate-300 rounded-md text-sm focus:ring-titan-500 focus:border-titan-500 p-2 border"
+              value={formData[field] || ''}
+              onChange={e => handleChange(field, e.target.value)}
+            />
+          </div>
+        );
+
+        return (
+          <div className={embedded ? "p-6" : "bg-white p-6"}>
+            {!embedded && (
+              <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
+                <h2 className="text-xl font-bold text-slate-800">
+                  {formData.Asset_UID ? `Edit Asset: ${formData.Asset_UID}` : 'New Asset'}
+                </h2>
+                <button onClick={onCancel} className="text-slate-500 hover:text-slate-700">✕</button>
+              </div>
+            )}
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Select label="Asset Type" field="Asset_Type" options={taxonomy?.assetTypes} />
+                <Select label="Asset Category" field="Asset_Category" options={taxonomy?.assetCategories} />
+                <Input label="Manufacturer" field="Manufacturer" />
+                <Input label="Model / Version" field="Model_Version" />
+                <Input label="Serial / Asset ID" field="Serial_Asset_ID" />
+                <Input label="Site / Location" field="Site_Location" />
+                <Select label="Network Segment" field="Network_Segment" options={taxonomy?.networkSegments} />
+                <Input label="IP Address" field="IP_Address" />
+                <Select label="Priority Band" field="Priority_Band" options={taxonomy?.priorityBands} />
+                <Select label="Risk Category" field="Risk_Category" options={taxonomy?.riskCategories} />
+                <Select label="State / Status" field="State_Status" options={taxonomy?.states} />
+                <Select label="Maintenance Schedule" field="Maintenance_Schedule" options={taxonomy?.maintenanceSchedule} />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Notes</label>
+                <textarea 
+                  className="w-full border-slate-300 rounded-md text-sm focus:ring-titan-500 focus:border-titan-500 p-2 border"
+                  rows={3}
+                  value={formData.Notes || ''}
+                  onChange={e => handleChange('Notes', e.target.value)}
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-6 border-t border-slate-100">
+                <button type="button" onClick={onCancel} className="px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 rounded-md border border-slate-300">Cancel</button>
+                <button type="submit" className="px-6 py-2 text-sm bg-titan-600 text-white rounded-md hover:bg-titan-700 font-medium shadow-sm">Save Asset</button>
+              </div>
+            </form>
+          </div>
+        );
+      }
+
+      // --- AssetDetails ---
+      function AssetDetails({ asset, onEdit, onClose }) {
+        const Section = ({ title, children }) => (
+          <div className="mb-6">
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 border-b border-slate-100 pb-1">{title}</h4>
+            <div className="grid grid-cols-1 gap-y-3">{children}</div>
+          </div>
+        );
+
+        const Field = ({ label, value }) => (
+          <div className="flex flex-col">
+            <span className="text-[10px] text-slate-500 font-medium uppercase">{label}</span>
+            <span className="text-sm text-slate-900 font-medium break-words">{value || '-'}</span>
+          </div>
+        );
+
+        return (
+          <div className="h-full flex flex-col bg-white">
+             <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-start bg-slate-50 flex-shrink-0">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                     <span className={`inline-block w-2 h-2 rounded-full ${asset.State_Status === 'Active' ? 'bg-green-500' : 'bg-slate-400'}`}></span>
+                     <h2 className="text-lg font-bold text-slate-800 font-mono tracking-tight">{asset.Asset_UID}</h2>
+                  </div>
+                  <p className="text-sm text-slate-600 font-medium">{asset.Asset_Type} <span className="text-slate-400">|</span> {asset.Site_Location}</p>
+                </div>
+                <div className="flex gap-2">
+                   <button onClick={onEdit} className="px-3 py-1.5 text-sm bg-white border border-slate-300 text-slate-700 rounded hover:bg-slate-50 font-medium shadow-sm">Edit Asset</button>
+                   <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-600">✕</button>
+                </div>
+             </div>
+             <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                <Section title="Identification">
+                   <div className="grid grid-cols-2 gap-6">
+                      <Field label="Manufacturer" value={asset.Manufacturer} />
+                      <Field label="Model / Version" value={asset.Model_Version} />
+                      <Field label="Serial Number" value={asset.Serial_Asset_ID} />
+                      <Field label="VAST ID" value={asset.VAST_ID} />
+                   </div>
+                </Section>
+                <Section title="Location & Network">
+                   <div className="grid grid-cols-2 gap-6">
+                      <Field label="Site Location" value={asset.Site_Location} />
+                      <Field label="Zone / Process Area" value={asset.Zone_Process_Area} />
+                      <Field label="IP Address" value={asset.IP_Address} />
+                      <Field label="Gateway" value={asset.Gateway_IP_Device} />
+                      <Field label="Network Segment" value={asset.Network_Segment} />
+                   </div>
+                </Section>
+                <Section title="Risk & Compliance">
+                   <div className="grid grid-cols-2 gap-6">
+                      <Field label="Risk Category" value={asset.Risk_Category} />
+                      <Field label="Criticality" value={asset.Criticality} />
+                      <Field label="CyberArk" value={asset.AOLR_in_CyberArk} />
+                      <Field label="Splunk" value={asset.Splunk_Logging} />
+                   </div>
+                </Section>
+                <Section title="Meta">
+                   <div className="mt-4"><Field label="Notes" value={asset.Notes} /></div>
+                </Section>
+             </div>
+          </div>
+        );
+      }
+
+      // --- AssetDrawer ---
+      function AssetDrawer({ isOpen, mode, asset, taxonomy, onClose, onEdit, onSave }) {
+        if (!isOpen) return null;
+
+        return (
+          <div className="relative z-50">
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px]" onClick={onClose} />
+            <div className="fixed inset-y-0 right-0 w-full max-w-2xl bg-white shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col border-l border-slate-200">
+               {mode === 'view' && asset ? (
+                  <AssetDetails asset={asset} onEdit={onEdit} onClose={onClose} />
+               ) : (
+                  <div className="h-full flex flex-col bg-white">
+                     <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 flex-shrink-0">
+                        <h2 className="text-lg font-bold text-slate-800">{asset?.Asset_UID ? `Edit ${asset.Asset_UID}` : 'New Asset'}</h2>
+                        <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-600">✕</button>
+                     </div>
+                     <div className="flex-1 overflow-y-auto">
+                       <AssetForm asset={asset || undefined} taxonomy={taxonomy} onSave={onSave} onCancel={onClose} embedded={true} />
+                     </div>
+                  </div>
+               )}
+            </div>
+          </div>
+        );
+      }
+
+      // --- AssetList ---
+      function AssetList({ assets, taxonomy, onEdit, onView, onBulkUpdate, isLoading }) {
+        const [selectedUids, setSelectedUids] = useState(new Set());
+        const [filters, setFilters] = useState({ search: '', Asset_Type: '', Risk_Category: '' });
+        const [showBulkModal, setShowBulkModal] = useState(false);
+        const [bulkConfig, setBulkConfig] = useState({ field: 'State_Status', value: 'Retired' });
+
+        const filteredAssets = useMemo(() => {
+          return assets.filter(asset => {
+            const matchSearch = filters.search === '' || Object.values(asset).some(val => String(val).toLowerCase().includes(filters.search.toLowerCase()));
+            const matchType = filters.Asset_Type === '' || asset.Asset_Type === filters.Asset_Type;
+            const matchRisk = filters.Risk_Category === '' || asset.Risk_Category === filters.Risk_Category;
+            return matchSearch && matchType && matchRisk;
+          });
+        }, [assets, filters]);
+
+        const toggleSelect = (uid) => {
+          const next = new Set(selectedUids);
+          if (next.has(uid)) next.delete(uid); else next.add(uid);
+          setSelectedUids(next);
+        };
+
+        const toggleSelectAll = () => {
+          selectedUids.size === filteredAssets.length ? setSelectedUids(new Set()) : setSelectedUids(new Set(filteredAssets.map(a => a.Asset_UID)));
+        };
+
+        if (isLoading) return <div className="flex justify-center p-10 text-titan-500">Loading Assets...</div>;
+
+        return (
+          <div className="space-y-4">
+            {/* Filter Bar */}
+            <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 flex flex-wrap gap-4 items-end">
+              <div className="flex-1 min-w-[200px]">
+                 <label className="block text-xs font-medium text-slate-500 mb-1">Search</label>
+                 <input type="text" placeholder="Search..." className="w-full text-sm border-slate-300 rounded p-2 border" value={filters.search} onChange={e => setFilters({...filters, search: e.target.value})} />
+              </div>
+              <div className="w-40">
+                 <label className="block text-xs font-medium text-slate-500 mb-1">Type</label>
+                 <select className="w-full text-sm border-slate-300 rounded p-2 border" value={filters.Asset_Type} onChange={e => setFilters({...filters, Asset_Type: e.target.value})}>
+                   <option value="">All</option>
+                   {taxonomy?.assetTypes?.map(t => <option key={t} value={t}>{t}</option>)}
+                 </select>
+              </div>
+              <div className="w-40">
+                 <label className="block text-xs font-medium text-slate-500 mb-1">Risk</label>
+                 <select className="w-full text-sm border-slate-300 rounded p-2 border" value={filters.Risk_Category} onChange={e => setFilters({...filters, Risk_Category: e.target.value})}>
+                   <option value="">All</option>
+                   {taxonomy?.riskCategories?.map(t => <option key={t} value={t}>{t}</option>)}
+                 </select>
+              </div>
+            </div>
+
+            {/* Action Bar */}
+            <div className="flex justify-between items-center">
+               <div className="text-sm text-slate-600">Showing <b>{filteredAssets.length}</b> assets</div>
+               <div className="flex gap-2">
+                  {selectedUids.size > 0 && <button onClick={() => setShowBulkModal(true)} className="bg-white border border-slate-300 px-3 py-1.5 rounded text-sm font-medium hover:bg-slate-50">Bulk Actions</button>}
+                  <button onClick={() => onEdit({})} className="bg-titan-600 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-titan-700 shadow-sm">+ Add Asset</button>
+               </div>
+            </div>
+
+            {/* Table */}
+            <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-3 w-8"><input type="checkbox" onChange={toggleSelectAll} checked={selectedUids.size === filteredAssets.length && filteredAssets.length > 0} /></th>
+                      {['UID', 'Type', 'Location', 'IP Address', 'Risk', 'Status'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-slate-200">
+                    {filteredAssets.map(asset => (
+                      <tr key={asset.Asset_UID} onClick={(e) => { if (e.target.type !== 'checkbox') onView(asset); }} className="hover:bg-slate-50 cursor-pointer">
+                        <td className="px-4 py-3"><input type="checkbox" checked={selectedUids.has(asset.Asset_UID)} onChange={() => toggleSelect(asset.Asset_UID)} onClick={e => e.stopPropagation()} /></td>
+                        <td className="px-4 py-3 text-sm font-mono text-titan-600">{asset.Asset_UID}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{asset.Asset_Type}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{asset.Site_Location}</td>
+                        <td className="px-4 py-3 text-sm font-mono">{asset.IP_Address}</td>
+                        <td className="px-4 py-3 text-sm"><span className={`px-2 py-0.5 rounded text-xs ${asset.Risk_Category === 'High' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>{asset.Risk_Category}</span></td>
+                        <td className="px-4 py-3 text-sm">{asset.State_Status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            
+            {/* Bulk Modal */}
+            {showBulkModal && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-white rounded-lg p-6 w-96 shadow-xl">
+                  <h3 className="text-lg font-medium mb-4">Bulk Update ({selectedUids.size})</h3>
+                  <div className="space-y-4">
+                     <div>
+                        <label className="block text-sm mb-1">Field</label>
+                        <select className="w-full border p-2 rounded" value={bulkConfig.field} onChange={e => setBulkConfig({...bulkConfig, field: e.target.value})}>
+                          <option value="State_Status">State / Status</option>
+                          <option value="Risk_Category">Risk Category</option>
+                        </select>
+                     </div>
+                     <div>
+                        <label className="block text-sm mb-1">Value</label>
+                        <select className="w-full border p-2 rounded" value={bulkConfig.value} onChange={e => setBulkConfig({...bulkConfig, value: e.target.value})}>
+                          {taxonomy?.states.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                     </div>
+                  </div>
+                  <div className="mt-6 flex justify-end gap-3">
+                     <button onClick={() => setShowBulkModal(false)} className="px-4 py-2 text-sm border rounded">Cancel</button>
+                     <button onClick={() => { onBulkUpdate(Array.from(selectedUids), bulkConfig.field, bulkConfig.value); setShowBulkModal(false); setSelectedUids(new Set()); }} className="px-4 py-2 text-sm bg-titan-600 text-white rounded">Update</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // --- Layout ---
+      function Layout({ children, activeView, onNavigate }) {
+        const navItems = [
+          { id: 'assets', label: 'Assets', icon: 'M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z' },
+          { id: 'relationships', label: 'Relationships', icon: 'M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11' }
+        ];
+
+        return (
+          <div className="flex h-screen bg-slate-50 text-slate-900">
+            <aside className="w-64 bg-slate-900 text-white flex flex-col">
+              <div className="p-6">
+                <h1 className="text-xl font-bold tracking-tight text-titan-500">TITAN <span className="text-white">OT CMDB</span></h1>
+                <p className="text-xs text-slate-400 mt-1">Industrial Asset Intelligence</p>
+              </div>
+              <nav className="flex-1 px-4 space-y-1">
+                {navItems.map((item) => (
+                  <button key={item.id} onClick={() => onNavigate(item.id)} className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-md ${activeView === item.id ? 'bg-titan-800 text-white' : 'text-slate-300 hover:bg-slate-800'}`}>
+                    <svg className="mr-3 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.icon} /></svg>
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
+              <div className="p-4 border-t border-slate-800 text-xs text-slate-400">v1.0.0 - GAS Deployment</div>
+            </aside>
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <header className="bg-white border-b border-slate-200 h-16 flex items-center px-8 shadow-sm justify-between">
+                 <h2 className="text-xl font-semibold text-slate-800">{navItems.find(n => n.id === activeView)?.label || 'Dashboard'}</h2>
+                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">System Online</span>
+              </header>
+              <main className="flex-1 overflow-auto p-8">{children}</main>
+            </div>
+          </div>
+        );
+      }
+
+      // --- App Main ---
+      function App() {
+        const [view, setView] = useState('assets');
+        const [assets, setAssets] = useState([]);
+        const [taxonomy, setTaxonomy] = useState(null);
+        const [isLoading, setIsLoading] = useState(true);
+        const [drawer, setDrawer] = useState({ isOpen: false, mode: 'view', asset: null });
+
+        useEffect(() => { loadData(); }, []);
+
+        const loadData = async () => {
+          setIsLoading(true);
+          try {
+            const [tax, allAssets] = await Promise.all([GAS.getDropdownOptions(), GAS.getAllAssets()]);
+            setTaxonomy(tax);
+            setAssets(allAssets || []);
+          } catch (e) { console.error(e); } 
+          finally { setIsLoading(false); }
+        };
+
+        const handleSave = async (asset) => {
+          await GAS.saveAsset(asset);
+          loadData();
+          setDrawer({ isOpen: true, mode: 'view', asset });
+        };
+
+        const handleBulkUpdate = async (uids, field, value) => {
+          await GAS.bulkUpdateAssets(uids, field, value);
+          loadData();
+        };
+
+        return (
+          <Layout activeView={view} onNavigate={setView}>
+            {view === 'assets' && (
+              <AssetList 
+                assets={assets} 
+                taxonomy={taxonomy} 
+                isLoading={isLoading}
+                onEdit={() => setDrawer({ isOpen: true, mode: 'edit', asset: null })} 
+                onView={(a) => setDrawer({ isOpen: true, mode: 'view', asset: a })}
+                onBulkUpdate={handleBulkUpdate}
+              />
+            )}
+            {view === 'relationships' && <div className="p-10 text-center text-slate-500">Relationship View (See relationships tab in Asset Details)</div>}
+            
+            <AssetDrawer 
+              isOpen={drawer.isOpen}
+              mode={drawer.mode}
+              asset={drawer.asset}
+              taxonomy={taxonomy}
+              onClose={() => setDrawer({...drawer, isOpen: false})}
+              onEdit={() => setDrawer({...drawer, mode: 'edit'})}
+              onSave={handleSave}
+            />
+          </Layout>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
