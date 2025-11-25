@@ -1,0 +1,254 @@
+/**
+ * TITAN OT CMDB — Google Apps Script Backend
+ * 
+ * This file contains the server-side logic to power the React application.
+ * Copy this content into 'Code.gs' in your Google Apps Script project.
+ */
+
+// ---------------------------
+//  CONFIGURATION
+// ---------------------------
+const CONFIG = {
+  SHEETS: {
+    ASSETS: 'Assets',
+    RELATIONSHIPS: 'Relationships',
+    TAXONOMY: 'Taxonomy',
+    DESIGN: 'NetworkDesign',
+    HISTORY: 'History'
+  },
+  HEADERS: {
+    ASSET_UID: 'Asset_UID',
+    REL_UID: 'Relationship_UID'
+  }
+};
+
+// ---------------------------
+//  HTTP SERVING
+// ---------------------------
+
+/**
+ * Serves the React application.
+ */
+function doGet(e) {
+  return HtmlService.createTemplateFromFile('index')
+    .evaluate()
+    .setTitle('Titan OT CMDB')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// ---------------------------
+//  ASSET MANAGEMENT API
+// ---------------------------
+
+/**
+ * Retrieves all assets from the 'Assets' sheet.
+ * @returns {Asset[]} Array of asset objects.
+ */
+function getAllAssets() {
+  return getData_(CONFIG.SHEETS.ASSETS);
+}
+
+/**
+ * Retrieves a single asset by UID.
+ * @param {string} uid 
+ * @returns {Asset|undefined}
+ */
+function getAssetById(uid) {
+  const assets = getData_(CONFIG.SHEETS.ASSETS);
+  return assets.find(a => a[CONFIG.HEADERS.ASSET_UID] === uid);
+}
+
+/**
+ * Creates or Updates an asset.
+ * If Asset_UID is missing, generates a new one.
+ * @param {Asset} asset 
+ * @returns {string} The Asset_UID
+ */
+function saveAsset(asset) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.ASSETS);
+  
+  if (!asset.Asset_UID) {
+    asset.Asset_UID = 'OT-' + new Date().getTime().toString().slice(-6);
+    asset.Created_Date = new Date().toISOString();
+  }
+  
+  asset.Modified_Date = new Date().toISOString();
+  
+  // Get Headers
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const rowData = headers.map(header => asset[header] || '');
+  
+  const data = sheet.getDataRange().getValues();
+  // Skip header
+  let rowIndex = -1;
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][headers.indexOf(CONFIG.HEADERS.ASSET_UID)] === asset.Asset_UID) {
+      rowIndex = i + 1; // 1-based index
+      break;
+    }
+  }
+  
+  if (rowIndex > 0) {
+    // Update existing
+    sheet.getRange(rowIndex, 1, 1, rowData.length).setValues([rowData]);
+  } else {
+    // Append new
+    sheet.appendRow(rowData);
+  }
+  
+  return asset.Asset_UID;
+}
+
+/**
+ * Bulk updates a specific field for multiple assets.
+ * @param {string[]} uids 
+ * @param {string} field 
+ * @param {string} value 
+ * @returns {number} Count of updated rows
+ */
+function bulkUpdateAssets(uids, field, value) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.ASSETS);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const colIndex = headers.indexOf(field);
+  const uidIndex = headers.indexOf(CONFIG.HEADERS.ASSET_UID);
+  const modDateIndex = headers.indexOf('Modified_Date');
+  
+  if (colIndex === -1 || uidIndex === -1) return 0;
+  
+  let count = 0;
+  const updates = [];
+  
+  // Find rows to update
+  for (let i = 1; i < data.length; i++) {
+    if (uids.includes(data[i][uidIndex])) {
+      sheet.getRange(i + 1, colIndex + 1).setValue(value);
+      if (modDateIndex !== -1) {
+        sheet.getRange(i + 1, modDateIndex + 1).setValue(new Date().toISOString());
+      }
+      count++;
+    }
+  }
+  
+  return count;
+}
+
+// ---------------------------
+//  RELATIONSHIP API
+// ---------------------------
+
+/**
+ * Gets upstream and downstream relationships for an asset.
+ * @param {string} uid 
+ */
+function getRelationships(uid) {
+  const allRels = getData_(CONFIG.SHEETS.RELATIONSHIPS);
+  return {
+    upstream: allRels.filter(r => r.Child_Asset_UID === uid),
+    downstream: allRels.filter(r => r.Parent_Asset_UID === uid)
+  };
+}
+
+/**
+ * Saves a relationship.
+ * @param {AssetRelationship} rel 
+ */
+function saveRelationship(rel) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.RELATIONSHIPS);
+  
+  if (!rel.Relationship_UID) {
+    rel.Relationship_UID = 'REL-' + Math.floor(Math.random() * 100000);
+  }
+  
+  // Simple append for demo purposes (real impl should upsert like saveAsset)
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const rowData = headers.map(h => rel[h] || '');
+  sheet.appendRow(rowData);
+  
+  return rel.Relationship_UID;
+}
+
+// ---------------------------
+//  TAXONOMY & UTILS
+// ---------------------------
+
+/**
+ * Reads taxonomy options from the 'Taxonomy' sheet.
+ * Assumes column headers are the category names (e.g., 'assetTypes').
+ */
+function getDropdownOptions() {
+  const data = getData_(CONFIG.SHEETS.TAXONOMY);
+  const result = {};
+  
+  if (data.length === 0) return {};
+  
+  // Pivot data: Array of objects -> Object of arrays
+  const keys = Object.keys(data[0]);
+  keys.forEach(key => {
+    // Filter out empty strings
+    result[key] = [...new Set(data.map(item => item[key]).filter(val => val !== ''))];
+  });
+  
+  return result;
+}
+
+/**
+ * Performs simple logic to compare Design sheet vs Asset sheet.
+ */
+function getDesignVsActual() {
+  const assets = getData_(CONFIG.SHEETS.ASSETS);
+  const design = getData_(CONFIG.SHEETS.DESIGN);
+  
+  const missingInAssets = design.filter(d => 
+    !assets.find(a => a.IP_Address === d.IP_Address && a.Site_Location === d.Site_Code)
+  );
+  
+  const missingInDesign = assets.filter(a => 
+    a.IP_Address && !design.find(d => d.IP_Address === a.IP_Address && d.Site_Code === a.Site_Location)
+  );
+  
+  return {
+    missingInAssets,
+    missingInDesign,
+    portMismatches: []
+  };
+}
+
+// ---------------------------
+//  PRIVATE HELPERS
+// ---------------------------
+
+/**
+ * Helper to convert sheet data to JSON array.
+ */
+function getData_(sheetName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return [];
+  
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return [];
+  
+  const headers = data[0];
+  const result = [];
+  
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const obj = {};
+    let hasData = false;
+    
+    headers.forEach((header, index) => {
+      obj[header] = row[index] === undefined ? '' : String(row[index]);
+      if (obj[header]) hasData = true;
+    });
+    
+    if (hasData) result.push(obj);
+  }
+  
+  return result;
+}
